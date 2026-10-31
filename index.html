@@ -64,6 +64,24 @@ h3{font-size:12.5px;color:#5f6779;margin:22px 0 8px;font-weight:500;letter-spaci
 color:#7d8699;font-size:12.5px;font-weight:600;font-family:inherit}
 .risk button.on{border-color:#2f6bff;background:#16224a;color:#8ab4ff}
 .risk button small{display:block;font-size:9.5px;font-weight:400;opacity:.65;margin-top:2px}
+/* 弹窗 */
+.modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:99;
+align-items:center;justify-content:center;padding:20px}
+.modal.on{display:flex}
+.mbox{background:#12151d;border:1px solid #2a3448;border-radius:18px;padding:20px;width:100%;max-width:340px}
+.mhead{font-size:17px;font-weight:700;color:#fff;margin-bottom:16px}
+.mrow{margin-bottom:13px}
+.mrow label{display:block;font-size:12px;color:#5f6779;margin-bottom:5px}
+.mrow input{width:100%;padding:13px 14px;border-radius:11px;border:1px solid #2a3448;background:#0a0c10;
+color:#fff;font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;font-family:inherit}
+.mrow input:focus{outline:none;border-color:#2f6bff}
+.mmsg{font-size:12px;color:#7d8699;min-height:18px;margin-bottom:12px;line-height:1.5}
+.mmsg.bad{color:#ff8fa0}
+.macts{display:flex;gap:10px}
+.macts button{flex:1;padding:14px;border-radius:12px;border:1px solid #2a3448;background:#1c2333;
+color:#8b93a6;font-size:15px;font-weight:600;font-family:inherit}
+.macts button.p{background:#19c07a;color:#04140d;border:0}
+.editlink{font-size:11.5px;color:#4a5162;text-decoration:none;border-bottom:1px dotted #2a3448;margin-left:auto}
 .ft{font-size:11px;color:#3d4352;text-align:center;margin-top:26px;line-height:1.9}
 .spin{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.3);
 border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-3px;margin-right:8px}
@@ -80,6 +98,26 @@ border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertica
 <div class="risk" id="riskbar"></div>
 
 <div id="out"></div>
+
+<!-- 记录/修改持仓的弹窗 -->
+<div class="modal" id="modal">
+  <div class="mbox">
+    <div class="mhead" id="m-title">记录开仓</div>
+    <div class="mrow">
+      <label>实际入场价</label>
+      <input id="m-entry" type="number" step="any" inputmode="decimal" oninput="onEntryEdit()">
+    </div>
+    <div class="mrow">
+      <label>止损价</label>
+      <input id="m-stop" type="number" step="any" inputmode="decimal" oninput="onStopEdit()">
+    </div>
+    <div class="mmsg" id="m-msg"></div>
+    <div class="macts">
+      <button onclick="modalClose()">取消</button>
+      <button class="p" onclick="modalSave()">确认</button>
+    </div>
+  </div>
+</div>
 
 <div class="ft">规则固定：突破 20 日高/低 → 开仓<br>止损 1.5 ATR · 杠杆按整数算 · 最多 2 仓</div>
 <div class="clear"><a href="javascript:resetAll()">清空开仓记录</a></div>
@@ -395,7 +433,7 @@ function render(rows, sigs) {
         '<span class="pill ' + cls + '">' + dirTxt + '</span>' +
         '<span class="pnl ' + pnlCls + '">' + (info.pnlPct >= 0 ? "+" : "") + info.pnlPct.toFixed(2) + '%</span>' +
         '</div><div class="kv">' +
-        '<div><span>入场</span><b>' + f(p.entry) + '</b></div>' +
+        '<div><span>入场</span><b onclick="editPos(\'' + r.sym + '\')">' + f(p.entry) + ' ✏️</b></div>' +
         '<div><span>现价</span><b>' + f(r.cur) + '</b></div>' +
         '<div><span>原止损</span><b>' + f(p.sl) + '</b></div>' +
         '<div><span>新止损</span>' + slTxt + '</div>' +
@@ -435,16 +473,94 @@ function render(rows, sigs) {
   $("out").innerHTML = h;
 }
 
+/* ============ 记录 / 修改持仓（可改入场价） ============ */
+let _editing = null;   // {sym, dir, atr, mode:'new'|'edit', stopTouched}
+
 function mark(sym, dir) {
   const p = loadPos(sym);
-  if (p) { alert(sym + " 已经记录过开仓了"); return; }
+  if (p) { alert(sym + " 已经记录过开仓了，可在持仓卡片里修改"); return; }
   const s = (window._last && window._last.sigs || []).find(x => x.sym === sym);
   if (!s) { alert("找不到这个信号，请重新检查"); return; }
-  if (!confirm("确认已在币安开好 " + sym + " 的仓，并挂上止损？")) return;
-  savePos(sym, {
-    dir: dir, entry: s.cur, sl: s.stop, ext: s.cur,
-    qty: s.qty, lev: s.lev, date: new Date().toISOString().slice(0, 10),
+  _editing = { sym, dir, atr: s.atr, mode: "new", stopTouched: false, sig: s };
+  $("m-title").textContent = "记录开仓 " + sym + " " + (dir === "L" ? "做多" : "做空");
+  $("m-entry").value = s.cur;
+  $("m-stop").value = s.stop.toFixed(s.stop >= 1000 ? 1 : s.stop >= 1 ? 3 : 5);
+  updateModalMsg();
+  $("modal").classList.add("on");
+}
+
+function onEntryEdit() {
+  if (!_editing || _editing.stopTouched) return;
+  const e = parseFloat($("m-entry").value);
+  if (!isFinite(e) || !_editing.atr) return;
+  const stop = _editing.dir === "L" ? e - CFG.K_SL * _editing.atr : e + CFG.K_SL * _editing.atr;
+  $("m-stop").value = stop.toFixed(stop >= 1000 ? 1 : stop >= 1 ? 3 : 5);
+  updateModalMsg();
+}
+
+/* 修改已有持仓的入场价 */
+function editPos(sym) {
+  const p = loadPos(sym);
+  if (!p) return;
+  const r = (window._last && window._last.rows || []).find(x => x.sym === sym);
+  _editing = { sym, dir: p.dir, atr: (r && r.atr) || 0, mode: "edit", stopTouched: true };
+  $("m-title").textContent = "修改 " + sym + " 入场价";
+  $("m-entry").value = p.entry;
+  $("m-stop").value = p.sl;
+  updateModalMsg();
+  $("modal").classList.add("on");
+}
+
+function onStopEdit() {
+  if (_editing) _editing.stopTouched = true;
+  updateModalMsg();
+}
+
+function updateModalMsg() {
+  if (!_editing) return;
+  const e = parseFloat($("m-entry").value);
+  const s = parseFloat($("m-stop").value);
+  const msg = $("m-msg");
+  msg.classList.remove("bad");
+  if (!isFinite(e) || !isFinite(s)) { msg.textContent = "填入数字"; return; }
+  const dist = Math.abs(e - s) / e;
+  if (dist <= 0) { msg.textContent = "止损不能等于入场价"; msg.classList.add("bad"); return; }
+  const riskUsd = CFG.CAPITAL * CFG.RISK;
+  const qty = riskUsd / (Math.abs(e - s));
+  const valid = _editing.dir === "L" ? s < e : s > e;
+  msg.innerHTML = "止损距离 <b style='color:#ffc94d'>" + (dist * 100).toFixed(2) + "%</b>　" +
+    "按此价位，数量应为 <b style='color:#8ab4ff'>" + qty.toFixed(6) + "</b>";
+  if (!valid) {
+    msg.innerHTML += "<br><span style='color:#ff8fa0'>⚠️ 方向不对：做多时止损要低于入场价，做空要高于</span>";
+    msg.classList.add("bad");
+  }
+}
+
+function modalClose() {
+  $("modal").classList.remove("on");
+  _editing = null;
+}
+
+function modalSave() {
+  if (!_editing) return;
+  const e = parseFloat($("m-entry").value);
+  const s = parseFloat($("m-stop").value);
+  if (!isFinite(e) || !isFinite(s) || e <= 0) { alert("价格填写有误"); return; }
+  const valid = _editing.dir === "L" ? s < e : s > e;
+  if (!valid) { alert("止损方向和持仓方向不一致"); return; }
+
+  const old = loadPos(_editing.sym);
+  savePos(_editing.sym, {
+    dir: _editing.dir,
+    entry: e,
+    sl: s,
+    ext: _editing.mode === "edit" && old ? (old.ext || e) : e,
+    qty: old ? old.qty : +(CFG.CAPITAL * CFG.RISK / Math.abs(e - s)).toFixed(6),
+    lev: old ? old.lev : 1,
+    date: old ? old.date : new Date().toISOString().slice(0, 10),
+    edited: _editing.mode === "edit" ? true : undefined,
   });
+  modalClose();
   if (window._last) render(window._last.rows, window._last.sigs);
 }
 

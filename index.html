@@ -59,6 +59,11 @@ h3{font-size:12.5px;color:#5f6779;margin:22px 0 8px;font-weight:500;letter-spaci
 .err{background:#1a0f11;border:1px solid #5c2028;color:#ff9aa6;padding:12px 14px;border-radius:12px;font-size:13.5px;margin-bottom:14px}
 .clear{text-align:center;margin-top:18px}
 .clear a{font-size:12px;color:#4a5162;text-decoration:none;border-bottom:1px dotted #2a3448}
+.risk{display:flex;gap:7px;margin-bottom:18px}
+.risk button{flex:1;padding:9px 4px;border-radius:11px;border:1px solid #202633;background:#12151d;
+color:#7d8699;font-size:12.5px;font-weight:600;font-family:inherit}
+.risk button.on{border-color:#2f6bff;background:#16224a;color:#8ab4ff}
+.risk button small{display:block;font-size:9.5px;font-weight:400;opacity:.65;margin-top:2px}
 .ft{font-size:11px;color:#3d4352;text-align:center;margin-top:26px;line-height:1.9}
 .spin{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.3);
 border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-3px;margin-right:8px}
@@ -72,9 +77,11 @@ border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertica
 <button class="btn" id="go" onclick="scanAll()">🔍 检查信号</button>
 <div class="hint" id="hint">每天点一次，30 秒看结果</div>
 
+<div class="risk" id="riskbar"></div>
+
 <div id="out"></div>
 
-<div class="ft">规则固定：突破 20 日高/低 → 开仓<br>止损 1.5 ATR · 每笔风险 5% · 最多 2 仓</div>
+<div class="ft">规则固定：突破 20 日高/低 → 开仓<br>止损 1.5 ATR · 杠杆按整数算 · 最多 2 仓</div>
 <div class="clear"><a href="javascript:resetAll()">清空开仓记录</a></div>
 
 <script>
@@ -82,12 +89,20 @@ border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertica
 const CFG = {
   N: 20,            // 突破周期
   K_SL: 1.5,        // 初始止损 ATR 倍数
-  RISK: 0.05,       // 单笔风险（保守改 0.03）
+  RISK: 0.08,       // 单笔风险（8% 对应「能接受50%回撤」）
   MAX_POS: 2,       // 最多同时持仓
-  MAX_LEV: 5,       // 杠杆上限（币安是整数倍）
+  MAX_LEV: 10,      // 杠杆上限
   CAPITAL: 97.66,   // 本金 USDT
   COINS: ["SOL","DOGE","BNB","ADA","BTC","ETH"]
 };
+
+/* 风险档位（点一下就切） */
+const RISK_LEVELS = [
+  { key: 0.03, name: "保守", hint: "亏50%概率 3%" },
+  { key: 0.05, name: "标准", hint: "亏50%概率 19%" },
+  { key: 0.08, name: "积极", hint: "亏50%概率 64%" },
+  { key: 0.15, name: "激进", hint: "亏50%概率 99%" },
+];
 
 /* ============ 工具 ============ */
 const $ = (id) => document.getElementById(id);
@@ -104,19 +119,34 @@ function jfetch(url, ms = 15000) {
   });
 }
 
-/* 抓日线：Gate.io 优先，OKX 兜底 */
+/* 抓日线：优先合约（U 本位永续），失败再退现货 */
 async function daily(sym) {
+  // 1) Gate.io 合约（跟你在币安做的是同一类标的）
   try {
-    const raw = await jfetch("https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=" +
+    const raw = await jfetch("https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=" +
       sym + "_USDT&interval=1d&limit=200");
-    const b = raw.map(r => ({ t: +r[0], o: +r[5], h: +r[3], l: +r[4], c: +r[2] }));
+    const b = raw.map(r => ({ t: +r.t, o: +r.o, h: +r.h, l: +r.l, c: +r.c }));
     b.sort((a, x) => a.t - x.t);
-    if (b.length >= 45) return b;
-  } catch (e) { /* 换 OKX */ }
-  const raw = await jfetch("https://www.okx.com/api/v5/market/candles?instId=" + sym + "-USDT&bar=1D&limit=200");
-  if (raw.code !== "0") throw new Error("OKX " + raw.msg);
-  const b = raw.data.map(r => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4] }));
+    if (b.length >= 45) { b._src = "合约"; return b; }
+  } catch (e) { /* 下一步 */ }
+
+  // 2) OKX 永续
+  try {
+    const raw = await jfetch("https://www.okx.com/api/v5/market/candles?instId=" + sym + "-USDT-SWAP&bar=1D&limit=200");
+    if (raw.code === "0" && raw.data && raw.data.length >= 45) {
+      const b = raw.data.map(r => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4] }));
+      b.sort((a, x) => a.t - x.t);
+      b._src = "合约";
+      return b;
+    }
+  } catch (e) { /* 下一步 */ }
+
+  // 3) 兜底：现货
+  const raw = await jfetch("https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=" +
+    sym + "_USDT&interval=1d&limit=200");
+  const b = raw.map(r => ({ t: +r[0], o: +r[5], h: +r[3], l: +r[4], c: +r[2] }));
   b.sort((a, x) => a.t - x.t);
+  b._src = "现货";
   return b;
 }
 
@@ -176,6 +206,24 @@ async function scanAll() {
 
   sigs.forEach(s => sizePosition(s));
 
+  // 保证金总量检查：同时持仓不能超过本金
+  let usedMargin = 0;
+  const keep = [];
+  const dropped = [];
+  for (const s of sigs) {
+    const m = s.notional / s.lev;
+    if (usedMargin + m <= CFG.CAPITAL * 0.95 && !s.tooSmall) {
+      usedMargin += m;
+      s.margin = m;
+      keep.push(s);
+    } else {
+      dropped.push(s);
+    }
+  }
+  sigs.length = 0;
+  sigs.push(...keep);
+  rows._dropped = dropped;
+
   render(rows, sigs);
   btn.disabled = false;
   btn.textContent = "🔍 重新检查";
@@ -231,6 +279,11 @@ function render(rows, sigs) {
     h += '<div class="err">取数失败：' + errs.map(r => r.sym).join("、") +
          '<br><span style="font-size:12px;color:#8b6b6b">检查手机网络，或换个时间再试</span></div>';
   }
+  if (rows._dropped && rows._dropped.length) {
+    h += '<div class="warn">保证金不够，跳过：' +
+         rows._dropped.map(s => s.sym).join("、") +
+         '<br><span style="opacity:.75">同时开仓占用保证金不能超过本金</span></div>';
+  }
 
   if (!sigs.length) {
     h += '<div class="empty"><b>今天没有信号</b>关掉就行，明天再看</div>';
@@ -248,6 +301,7 @@ function render(rows, sigs) {
         '<div><span>杠杆</span><b class="lev">' + s.lev + 'x 📋</b></div>' +
         '<div><span>数量</span><b onclick="copyOne(\'' + qtyStr(s) + '\',this)">' + qtyStr(s) + ' 📋</b></div>' +
         '<div><span>名义</span><b>' + s.notional.toFixed(1) + 'U</b></div>' +
+        '<div><span>保证金</span><b>' + (s.margin || (s.notional / s.lev)).toFixed(1) + 'U</b></div>' +
         '<div><span>实际风险</span><b class="' + (s.overRisk ? "bad" : "good") + '">' + s.risk.toFixed(2) + 'U</b></div>' +
         '</div>' +
         (s.tooSmall ? '<div class="warn">⚠️ 仓位低于币安最小下单额 5U，这笔做不了</div>' : '') +
@@ -333,6 +387,35 @@ function copyOne(v, el) {
     navigator.clipboard.writeText(txt).then(done).catch(() => fallbackCopy(txt, done));
   } else { fallbackCopy(txt, done); }
 }
+
+/* ============ 风险档位切换 ============ */
+function renderRiskBar() {
+  const bar = $("riskbar");
+  if (!bar) return;
+  bar.innerHTML = RISK_LEVELS.map(r =>
+    '<button class="' + (Math.abs(CFG.RISK - r.key) < 1e-9 ? "on" : "") +
+    '" onclick="setRisk(' + r.key + ')">' + r.name +
+    '<small>' + (r.key * 100) + '%</small></button>'
+  ).join("");
+}
+
+function setRisk(v) {
+  CFG.RISK = v;
+  try { localStorage.setItem("risk", String(v)); } catch (e) {}
+  renderRiskBar();
+  if (window._last) {
+    window._last.sigs.forEach(s => sizePosition(s));
+    render(window._last.rows, window._last.sigs);
+  }
+  $("hint").textContent = "已切换到 " + (v * 100) + "% 风险";
+}
+
+/* 恢复上次选择的风险档 */
+try {
+  const saved = parseFloat(localStorage.getItem("risk"));
+  if (saved && saved > 0 && saved <= 0.5) CFG.RISK = saved;
+} catch (e) {}
+renderRiskBar();
 
 /* 页面加载：有 3 分钟内缓存就显示缓存，否则自动检查 */
 (function () {

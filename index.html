@@ -571,9 +571,7 @@ async function renderAlts() {
       const qs = qty >= 1 ? qty.toFixed(2) : qty.toFixed(6);
       h += '<div class="scard">' +
         '<div class="atop"><span class="anm">' + a.sym + '</span>' +
-        (a.on_bn === true
-          ? '<span class="bnok">币安可做</span>'
-          : (a.on_bn === false ? '<span class="bnno">币安无此合约</span>' : '')) +
+        '<span class="bnok">币安合约</span>' +
         '<span class="sbadge">暴涨 +' + a.pump_pct + '%</span></div>' +
         '<div class="aline">现价 <b class="good">' + f(a.price) + '</b>' +
         '　仓位 <b>' + posUsd.toFixed(2) + 'U</b>（1x）</div>' +

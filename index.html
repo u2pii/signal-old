@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0a0c10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="信号">
+<meta name="format-detection" content="telephone=no">
+<title>今日信号</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{overflow-x:hidden}
+body{margin:0 auto;background:#0a0c10;color:#d2d8e6;font:16px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+padding:18px 16px 50px;max-width:430px;min-height:100vh;-webkit-text-size-adjust:100%}
+h1{font-size:20px;margin:0 0 4px;color:#fff;font-weight:700}
+.s{font-size:12.5px;color:#5f6779;margin-bottom:20px}
+.btn{width:100%;padding:22px;border:0;border-radius:18px;font-size:19px;font-weight:700;color:#fff;
+background:linear-gradient(135deg,#2f6bff,#1f4fd0);box-shadow:0 8px 28px rgba(47,107,255,.4);
+margin-bottom:8px;font-family:inherit}
+.btn:active{transform:scale(.98)}
+.btn:disabled{opacity:.55;box-shadow:none}
+.hint{font-size:11.5px;color:#4a5162;text-align:center;margin-bottom:22px}
+.card{background:#12151d;border:1px solid #202633;border-radius:16px;padding:16px;margin-bottom:14px;overflow:hidden}
+.card.go{border-left:3px solid #19c07a;background:#0d1a14}
+.card.done{opacity:.5;border-left-color:#3a4356}
+.top{display:flex;align-items:center;gap:9px;margin-bottom:12px;flex-wrap:wrap}
+.sym{font-size:20px;font-weight:700;color:#fff}
+.pill{font-size:12px;padding:3px 11px;border-radius:20px;font-weight:600;white-space:nowrap}
+.pill.L{background:#3a1420;color:#ff8fa0}
+.pill.S{background:#0f2e22;color:#4fe0a8}
+.pill.x{margin-left:auto;background:#19c07a;color:#04140d;font-size:11.5px}
+.pill.ok{background:#2a3448;color:#8b93a6;font-size:11.5px;margin-left:auto}
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:9px 12px;font-size:14px}
+.kv div{display:flex;justify-content:space-between;gap:6px;min-width:0}
+.kv span{color:#5f6779;font-size:12.5px;white-space:nowrap}
+.kv b{color:#fff;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stop{color:#ffc94d!important}
+.acts{display:flex;gap:10px;margin-top:14px}
+.acts a{flex:1;text-align:center;padding:14px 8px;border-radius:13px;font-size:14.5px;font-weight:600;
+text-decoration:none;background:#1c2333;color:#8ab4ff;border:1px solid #2a3448;cursor:pointer}
+.acts a.p{background:#19c07a;color:#04140d;border:0}
+.acts a:active{opacity:.8}
+.w{display:grid;grid-template-columns:54px 1fr 1fr;gap:8px;align-items:center;
+padding:11px 4px;border-bottom:1px solid #181d28;font-size:13px}
+.w .n{font-weight:700;color:#c8cfe0;font-size:14px}
+.w .u{color:#7d8699;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.w .u b{color:#c8cfe0;font-variant-numeric:tabular-nums}
+.w .u i{display:block;font-style:normal;font-size:11px;color:#4a5162}
+h3{font-size:12.5px;color:#5f6779;margin:22px 0 8px;font-weight:500;letter-spacing:.5px}
+.empty{text-align:center;padding:34px 0;color:#5f6779}
+.empty b{display:block;font-size:17px;color:#98a0b3;margin-bottom:6px}
+.err{background:#1a0f11;border:1px solid #5c2028;color:#ff9aa6;padding:12px 14px;border-radius:12px;font-size:13.5px;margin-bottom:14px}
+.clear{text-align:center;margin-top:18px}
+.clear a{font-size:12px;color:#4a5162;text-decoration:none;border-bottom:1px dotted #2a3448}
+.ft{font-size:11px;color:#3d4352;text-align:center;margin-top:26px;line-height:1.9}
+.spin{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.3);
+border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-3px;margin-right:8px}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<h1>今日信号</h1>
+<div class="s" id="sub">Donchian 20 · 日线</div>
+
+<button class="btn" id="go" onclick="scanAll()">🔍 检查信号</button>
+<div class="hint" id="hint">每天点一次，30 秒看结果</div>
+
+<div id="out"></div>
+
+<div class="ft">规则固定：突破 20 日高/低 → 开仓<br>止损 1.5 ATR · 每笔风险 5% · 最多 2 仓</div>
+<div class="clear"><a href="javascript:resetAll()">清空开仓记录</a></div>
+
+<script>
+/* ============ 配置 ============ */
+const CFG = {
+  N: 20,            // 突破周期
+  K_SL: 1.5,        // 初始止损 ATR 倍数
+  RISK: 0.05,       // 单笔风险（保守改 0.03）
+  MAX_POS: 2,       // 最多同时持仓
+  CAPITAL: 98,      // 本金 USDT
+  COINS: ["SOL","DOGE","BNB","ADA","BTC","ETH"]
+};
+
+/* ============ 工具 ============ */
+const $ = (id) => document.getElementById(id);
+const f = (p) => p >= 1000 ? p.toFixed(1) : p >= 10 ? p.toFixed(2) : p >= 1 ? p.toFixed(3) : p.toFixed(5);
+
+function jfetch(url, ms = 15000) {
+  return new Promise((res, rej) => {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), ms);
+    fetch(url, { signal: ctl.signal })
+      .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(d => { clearTimeout(t); res(d); })
+      .catch(e => { clearTimeout(t); rej(e); });
+  });
+}
+
+/* 抓日线：Gate.io 优先，OKX 兜底 */
+async function daily(sym) {
+  try {
+    const raw = await jfetch("https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=" +
+      sym + "_USDT&interval=1d&limit=200");
+    const b = raw.map(r => ({ t: +r[0], o: +r[5], h: +r[3], l: +r[4], c: +r[2] }));
+    b.sort((a, x) => a.t - x.t);
+    if (b.length >= 45) return b;
+  } catch (e) { /* 换 OKX */ }
+  const raw = await jfetch("https://www.okx.com/api/v5/market/candles?instId=" + sym + "-USDT&bar=1D&limit=200");
+  if (raw.code !== "0") throw new Error("OKX " + raw.msg);
+  const b = raw.data.map(r => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4] }));
+  b.sort((a, x) => a.t - x.t);
+  return b;
+}
+
+function atr14(bars, n = 14) {
+  let a = null; const tr = [];
+  for (let i = 0; i < bars.length; i++) {
+    const b = bars[i];
+    const v = i === 0 ? b.h - b.l
+      : Math.max(b.h - b.l, Math.abs(b.h - bars[i-1].c), Math.abs(b.l - bars[i-1].c));
+    tr.push(v);
+    if (i === n - 1) a = tr.slice(0, n).reduce((x, y) => x + y, 0) / n;
+    else if (i >= n) a = (a * (n - 1) + v) / n;
+  }
+  return a;
+}
+
+/* ============ 本地记录 ============ */
+const K = (s) => "pos_" + s;
+const load = (s) => { try { const v = localStorage.getItem(K(s)); return v ? JSON.parse(v) : null } catch(e) { return null } };
+const save = (s, o) => { try { localStorage.setItem(K(s), JSON.stringify(o)) } catch(e) {} };
+const del = (s) => { try { localStorage.removeItem(K(s)) } catch(e) {} };
+
+function resetAll() {
+  if (!confirm("清空所有开仓记录？（只清记录，不影响你的实际持仓）")) return;
+  Object.keys(localStorage).filter(k => k.indexOf("pos_") === 0).forEach(k => localStorage.removeItem(k));
+  location.reload();
+}
+
+/* ============ 主流程 ============ */
+async function scanAll() {
+  const btn = $("go");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>抓数据中…';
+  $("out").innerHTML = "";
+  $("hint").textContent = "正在拉取 6 个币的日线数据…";
+
+  const rows = await Promise.all(CFG.COINS.map(async (sym) => {
+    try {
+      const bars = await daily(sym);
+      const closed = bars.slice(0, -1);
+      const cur = bars[bars.length - 1].c;
+      const n = CFG.N;
+      const seg = closed.slice(-n - 1, -1);   // 关键：排除当前根
+      const hh = Math.max.apply(null, seg.map(b => b.h));
+      const ll = Math.min.apply(null, seg.map(b => b.l));
+      const atr = atr14(closed);
+      return { sym, cur, hh, ll, atr, sig: cur > hh ? "L" : (cur < ll ? "S" : null) };
+    } catch (e) {
+      return { sym, err: String(e.message || e).slice(0, 40) };
+    }
+  }));
+
+  // 取信号，按优先级
+  const sigs = rows.filter(r => r.sig)
+    .sort((a, b) => CFG.COINS.indexOf(a.sym) - CFG.COINS.indexOf(b.sym))
+    .slice(0, CFG.MAX_POS);
+
+  sigs.forEach(s => {
+    s.stop = s.sig === "L" ? s.cur - CFG.K_SL * s.atr : s.cur + CFG.K_SL * s.atr;
+    const dist = Math.abs(s.cur - s.stop) / s.cur;
+    let notional = (CFG.CAPITAL * CFG.RISK) / dist;
+    const cap = CFG.CAPITAL * 3;
+    if (notional > cap) notional = cap;
+    s.notional = notional;
+    s.qty = notional / s.cur;
+    s.lev = notional / CFG.CAPITAL;
+    s.dist = dist * 100;
+  });
+
+  render(rows, sigs);
+  btn.disabled = false;
+  btn.textContent = "🔍 重新检查";
+  $("hint").textContent = "点上面按钮可以重新检查";
+  $("sub").textContent = "Donchian 20 · 日线 · " + new Date().toLocaleString("zh-CN", { hour12: false });
+}
+
+function render(rows, sigs) {
+  let h = "";
+
+  const errs = rows.filter(r => r.err);
+  if (errs.length) {
+    h += '<div class="err">取数失败：' + errs.map(r => r.sym).join("、") +
+         '<br><span style="font-size:12px;color:#8b6b6b">检查手机网络，或换个时间再试</span></div>';
+  }
+
+  if (!sigs.length) {
+    h += '<div class="empty"><b>今天没有信号</b>关掉就行，明天再看</div>';
+  } else {
+    sigs.forEach(s => {
+      const rec = load(s.sym);
+      const isDone = rec && rec.dir === s.sig;
+      h += '<div class="card go' + (isDone ? " done" : "") + '">' +
+        '<div class="top"><span class="sym">' + s.sym + '</span>' +
+        '<span class="pill ' + s.sig + '">' + (s.sig === "L" ? "做多 ↗" : "做空 ↘") + '</span>' +
+        (isDone ? '<span class="pill ok">已开仓</span>' : '<span class="pill x">立即开仓</span>') +
+        '</div><div class="kv">' +
+        '<div><span>入场</span><b>' + f(s.cur) + '</b></div>' +
+        '<div><span>止损</span><b class="stop">' + f(s.stop) + '</b></div>' +
+        '<div><span>数量</span><b>' + s.qty.toFixed(6) + '</b></div>' +
+        '<div><span>名义</span><b>' + s.notional.toFixed(0) + 'U</b></div>' +
+        '<div><span>杠杆</span><b>' + s.lev.toFixed(2) + 'x</b></div>' +
+        '<div><span>止损距离</span><b>' + s.dist.toFixed(2) + '%</b></div>' +
+        '</div><div class="acts">' +
+        '<a class="p" href="https://www.binance.com/zh-CN/futures/' + s.sym + 'USDT">打开币安 ' + s.sym + '</a>' +
+        '<a onclick="mark(\'' + s.sym + '\',\'' + s.sig + '\')">' +
+        (isDone ? '已记录 ✓' : '我已开仓') + '</a>' +
+        '</div></div>';
+    });
+  }
+
+  h += '<h3>全部币种</h3>';
+  rows.forEach(r => {
+    if (r.err) {
+      h += '<div class="w"><span class="n">' + r.sym + '</span>' +
+           '<span class="u" style="grid-column:2/4;color:#e8484f">失败</span></div>';
+      return;
+    }
+    if (r.sig) {
+      h += '<div class="w"><span class="n">' + r.sym + '</span>' +
+           '<span class="u" style="grid-column:2/4;color:#19c07a">已触发 ' +
+           (r.sig === "L" ? "做多" : "做空") + ' ↗</span></div>';
+      return;
+    }
+    h += '<div class="w"><span class="n">' + r.sym + '</span>' +
+      '<span class="u">↑ <b>' + f(r.hh) + '</b><i>' + ((r.hh / r.cur - 1) * 100).toFixed(1) + '%</i></span>' +
+      '<span class="u">↓ <b>' + f(r.ll) + '</b><i>' + ((r.ll / r.cur - 1) * 100).toFixed(1) + '%</i></span></div>';
+  });
+
+  $("out").innerHTML = h;
+}
+
+function mark(sym, dir) {
+  if (load(sym)) { alert(sym + " 已经记录过开仓了"); return; }
+  if (!confirm("确认已在币安开好 " + sym + " 的仓，并挂上止损？")) return;
+  save(sym, { dir: dir, t: Date.now() });
+  const btn = $("go");
+  btn.textContent = "🔍 重新检查";
+  // 重新渲染当前结果
+  if (window._last) render(window._last.rows, window._last.sigs);
+}
+
+/* 页面加载：有 3 分钟内缓存就显示缓存，否则自动检查 */
+(function () {
+  let shown = false;
+  try {
+    const c = localStorage.getItem("last_result");
+    if (c) {
+      const d = JSON.parse(c);
+      if (Date.now() - d.t < 180000) {
+        render(d.rows, d.sigs);
+        $("hint").textContent = "显示几分钟前的结果，点上面可刷新";
+        $("go").textContent = "🔍 重新检查";
+        shown = true;
+      }
+    }
+  } catch (e) {}
+  if (!shown) setTimeout(scanAll, 200);
+})();
+
+/* 保存结果供 mark() 重渲染 */
+const _origRender = render;
+window.render = function (rows, sigs) {
+  window._last = { rows, sigs };
+  try { localStorage.setItem("last_result", JSON.stringify({ rows, sigs, t: Date.now() })); } catch (e) {}
+  _origRender(rows, sigs);
+};
+</script>
+</body>
+</html>

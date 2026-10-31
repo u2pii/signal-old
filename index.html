@@ -82,6 +82,16 @@ color:#fff;font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;font
 color:#8b93a6;font-size:15px;font-weight:600;font-family:inherit}
 .macts button.p{background:#19c07a;color:#04140d;border:0}
 .editlink{font-size:11.5px;color:#4a5162;text-decoration:none;border-bottom:1px dotted #2a3448;margin-left:auto}
+.altcard{background:#12151d;border:1px solid #202633;border-radius:12px;padding:11px 13px;margin-bottom:8px}
+.altcard.bad{border-left:3px solid #e8484f;background:#161013}
+.atop{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.anm{font-size:15.5px;font-weight:700;color:#fff}
+.ab{font-size:11px;padding:2px 9px;border-radius:20px;background:#3a1418;color:#ff8fa0;margin-left:auto;font-weight:600}
+.aw{font-size:11px;padding:2px 9px;border-radius:20px;background:#16224a;color:#8ab4ff;margin-left:auto;font-weight:600}
+.aline{font-size:12.5px;color:#7d8699;line-height:1.75}
+.aline b{color:#c9cfdd;font-variant-numeric:tabular-nums}
+.aline b.bad{color:#ff6b7d}
+.aline b.good{color:#19c07a}
 .ft{font-size:11px;color:#3d4352;text-align:center;margin-top:26px;line-height:1.9}
 .spin{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.3);
 border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-3px;margin-right:8px}
@@ -98,6 +108,7 @@ border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertica
 <div class="risk" id="riskbar"></div>
 
 <div id="out"></div>
+<div id="alts"></div>
 
 <!-- 记录/修改持仓的弹窗 -->
 <div class="modal" id="modal">
@@ -510,6 +521,63 @@ function render(rows, sigs) {
   });
 
   $("out").innerHTML = h;
+
+  // 山寨币风险/观察名单（异步加载，不阻塞主流程）
+  renderAlts();
+}
+
+/* ============ 山寨币风险 / 观察名单 ============ */
+let ALT = null;
+
+async function loadAlts() {
+  try {
+    const r = await fetch("alt_watch.json?t=" + Date.now());
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; }
+}
+
+async function renderAlts() {
+  if (!ALT) ALT = await loadAlts();
+  const box = $("alts");
+  if (!box) return;
+  if (!ALT) { box.innerHTML = ""; return; }
+
+  let h = '<h3>山寨币监控 · ' + (ALT.updated || "") + "</h3>";
+
+  if (ALT.risky && ALT.risky.length) {
+    h += '<div class="warn" style="margin-bottom:10px">⚠️ <b>高危名单</b>：涨得猛 + 前期已涨很多 + 量能不足。' +
+         '历史上这类币 5 天内跌超 50% 的概率约 20%，别买、持有的话考虑减仓。</div>';
+    ALT.risky.forEach(a => {
+      h += '<div class="altcard bad">' +
+        '<div class="atop"><span class="anm">' + a.sym + '</span>' +
+        '<span class="ab">风险 ' + a.risk + "</span></div>" +
+        '<div class="aline">最大单日涨 <b class="bad">+' + a.max_day + '%</b>' +
+        '　20日累计 <b class="bad">+' + a.prior20 + '%</b></div>' +
+        '<div class="aline">量能 <b>' + a.vol_ratio + 'x</b>' +
+        '　距5日高点 <b>' + a.drawdown5 + '%</b></div></div>';
+    });
+  }
+
+  if (ALT.watch && ALT.watch.length) {
+    h += '<div class="warn" style="margin:14px 0 10px;background:#0e1520;border-color:#1e2c44;color:#8ab4ff">' +
+         '👀 <b>观察名单</b>：成交量突然放大但价格还没大涨，可能有异动。' +
+         '<br><span style="opacity:.75;font-size:11.5px">注意：这只是观察，回测证明按这个做单没有统计优势</span></div>';
+    ALT.watch.forEach(a => {
+      h += '<div class="altcard">' +
+        '<div class="atop"><span class="anm">' + a.sym + '</span>' +
+        '<span class="aw">观察 ' + a.watch + "</span></div>" +
+        '<div class="aline">当前量能 <b class="good">' + a.now_vol + 'x</b>' +
+        '　距20日高 <b>' + a.to_high + '%</b></div>' +
+        '<div class="aline">20日涨跌 <b>' + a.prior20 + '%</b>' +
+        '　日均振幅 <b>' + a.amp + '%</b></div></div>';
+    });
+  }
+
+  if (ALT.note) {
+    h += '<div style="font-size:11px;color:#3d4352;line-height:1.8;margin-top:12px">' + ALT.note + "</div>";
+  }
+  box.innerHTML = h;
 }
 
 /* ============ 记录 / 修改持仓（可改入场价） ============ */

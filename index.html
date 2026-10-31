@@ -208,13 +208,13 @@ function render(rows, sigs) {
         (isDone ? '<span class="pill ok">已开仓</span>' : '<span class="pill x">立即开仓</span>') +
         '</div><div class="kv">' +
         '<div><span>入场</span><b>' + f(s.cur) + '</b></div>' +
-        '<div><span>止损</span><b class="stop">' + f(s.stop) + '</b></div>' +
-        '<div><span>数量</span><b>' + s.qty.toFixed(6) + '</b></div>' +
+        '<div><span>止损</span><b class="stop" onclick="copyOne(\'' + (s.stop >= 1000 ? s.stop.toFixed(1) : s.stop.toFixed(3)) + '\',this)">' + f(s.stop) + ' 📋</b></div>' +
+        '<div><span>数量</span><b onclick="copyOne(\'' + s.qty.toFixed(6) + '\',this)">' + s.qty.toFixed(6) + ' 📋</b></div>' +
         '<div><span>名义</span><b>' + s.notional.toFixed(0) + 'U</b></div>' +
         '<div><span>杠杆</span><b>' + s.lev.toFixed(2) + 'x</b></div>' +
         '<div><span>止损距离</span><b>' + s.dist.toFixed(2) + '%</b></div>' +
         '</div><div class="acts">' +
-        '<a class="p" href="https://www.binance.com/zh-CN/futures/' + s.sym + 'USDT">打开币安 ' + s.sym + '</a>' +
+        '<a class="p" onclick="copyOrder(\'' + s.sym + '\',\'' + s.sig + '\',' + s.qty + ',' + s.stop + ',this)">📋 复制下单参数</a>' +
         '<a onclick="mark(\'' + s.sym + '\',\'' + s.sig + '\')">' +
         (isDone ? '已记录 ✓' : '我已开仓') + '</a>' +
         '</div></div>';
@@ -250,6 +250,42 @@ function mark(sym, dir) {
   btn.textContent = "🔍 重新检查";
   // 重新渲染当前结果
   if (window._last) render(window._last.rows, window._last.sigs);
+}
+
+/* 复制下单参数（不用跳转币安网站，直接粘到 App 里） */
+function copyOrder(sym, dir, qty, stop, el) {
+  const txt = sym + "USDT " + (dir === "L" ? "做多" : "做空") +
+              "\n数量 " + qty.toFixed(6) +
+              "\n止损 " + (stop >= 1000 ? stop.toFixed(1) : stop.toFixed(3));
+  const done = () => {
+    if (el) { const o = el.textContent; el.textContent = "✅ 已复制"; setTimeout(() => el.textContent = o, 1600); }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(done).catch(() => fallbackCopy(txt, done));
+  } else {
+    fallbackCopy(txt, done);
+  }
+}
+
+function fallbackCopy(txt, cb) {
+  const ta = document.createElement("textarea");
+  ta.value = txt;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); if (cb) cb(); }
+  catch (e) { alert("请手动复制：\n\n" + txt); }
+  document.body.removeChild(ta);
+}
+
+/* 点单个数值也能复制 */
+function copyOne(v, el) {
+  const txt = String(v);
+  const done = () => { if (el) { const o = el.textContent; el.textContent = "已复制"; setTimeout(() => el.textContent = o, 900); } };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(done).catch(() => fallbackCopy(txt, done));
+  } else { fallbackCopy(txt, done); }
 }
 
 /* 页面加载：有 3 分钟内缓存就显示缓存，否则自动检查 */

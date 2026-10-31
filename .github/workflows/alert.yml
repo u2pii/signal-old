@@ -32,11 +32,14 @@ jobs:
       - name: Scan altcoins
         run: python scan_alts.py || true
 
+      - name: Show alt result
+        run: python -c "import json;d=json.load(open('alt_watch.json',encoding='utf-8'));print('scanned',d['scanned']);print('short',[(x['sym'],x.get('on_bn')) for x in d.get('short',[])])" || true
+
       - name: Commit state and alt data
         run: |
           git config user.name "signal-bot"
           git config user.email "signal-bot@users.noreply.github.com"
-          git add alert_state.json alt_watch.json || true
+          git add alert_state.json alt_watch.json binance_futures.json || true
           if git diff --staged --quiet; then
             echo "no change"
           else

@@ -444,13 +444,16 @@ function render(rows, sigs) {
       const slTxt = info.moved
         ? '<b class="good">' + f(info.sl) + ' ⬆️</b>'
         : '<b>' + f(info.sl) + '</b>';
+      // 盈亏金额（U）
+      const pnlUsd = p.qty ? p.qty * r.cur * (info.pnlPct / 100) : 0;
       h += '<div class="card hold">' +
         '<div class="top"><span class="sym">' + r.sym + '</span>' +
         '<span class="pill ' + cls + '">' + dirTxt + '</span>' +
         (r.sig
           ? '<span class="pill ' + r.sig + '" style="font-size:11px">信号持续</span>'
           : '<span class="pill ok" style="font-size:11px">信号已失效</span>') +
-        '<span class="pnl ' + pnlCls + '">' + (info.pnlPct >= 0 ? "+" : "") + info.pnlPct.toFixed(2) + '%</span>' +
+        '<span class="pnl ' + pnlCls + '">' + (info.pnlPct >= 0 ? "+" : "") + info.pnlPct.toFixed(2) + '%' +
+        ' <span style="font-size:11px;opacity:.75">' + (pnlUsd >= 0 ? "+" : "") + pnlUsd.toFixed(2) + "U</span></span>" +
         '</div><div class="kv">' +
         '<div><span>入场</span><b onclick="editPos(\'' + r.sym + '\')">' + f(p.entry) + ' ✏️</b></div>' +
         '<div><span>现价</span><b>' + f(r.cur) + '</b></div>' +
@@ -475,8 +478,19 @@ function render(rows, sigs) {
     });
   }
 
-  h += '<h3>全部币种</h3>';
-  rows.forEach(r => {
+  h += '<h3>全部币种 · 按接近突破排序</h3>';
+  // 计算每个币到最近突破位的距离，排序（已触发的排最前）
+  const ranked = rows.map(r => {
+    if (r.err) return { r, near: 999 };
+    if (r.sig) return { r, near: -1 };
+    const up = (r.hh / r.cur - 1) * 100;
+    const dn = (1 - r.ll / r.cur) * 100;
+    return { r, near: Math.min(up, dn), up, dn };
+  }).sort((a, b) => a.near - b.near);
+
+  const closest = ranked.find(x => x.near >= 0 && x.near < 900);
+
+  ranked.forEach(({ r, up, dn }) => {
     if (r.err) {
       h += '<div class="w"><span class="n">' + r.sym + '</span>' +
            '<span class="u" style="grid-column:2/4;color:#e8484f">失败</span></div>';
@@ -488,9 +502,11 @@ function render(rows, sigs) {
            (r.sig === "L" ? "做多" : "做空") + ' ↗</span></div>';
       return;
     }
-    h += '<div class="w"><span class="n">' + r.sym + '</span>' +
-      '<span class="u">↑ <b>' + f(r.hh) + '</b><i>' + ((r.hh / r.cur - 1) * 100).toFixed(1) + '%</i></span>' +
-      '<span class="u">↓ <b>' + f(r.ll) + '</b><i>' + ((r.ll / r.cur - 1) * 100).toFixed(1) + '%</i></span></div>';
+    const isNear = closest && closest.r.sym === r.sym;
+    h += '<div class="w"' + (isNear ? ' style="background:#12151d;border-radius:8px"' : '') + '>' +
+      '<span class="n">' + r.sym + (isNear ? ' <span style="font-size:9px;color:#f0be5a">最近</span>' : '') + '</span>' +
+      '<span class="u">↑ <b>' + f(r.hh) + '</b><i>' + up.toFixed(1) + '%</i></span>' +
+      '<span class="u">↓ <b>' + f(r.ll) + '</b><i>' + dn.toFixed(1) + '%</i></span></div>';
   });
 
   $("out").innerHTML = h;

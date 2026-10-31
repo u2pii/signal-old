@@ -92,6 +92,16 @@ color:#8b93a6;font-size:15px;font-weight:600;font-family:inherit}
 .aline b{color:#c9cfdd;font-variant-numeric:tabular-nums}
 .aline b.bad{color:#ff6b7d}
 .aline b.good{color:#19c07a}
+.shortbox{background:#0f1410;border:1px solid #1e3a28;border-radius:14px;padding:14px;margin-bottom:16px}
+.shorthead{font-size:15.5px;font-weight:700;color:#19c07a;margin-bottom:8px}
+.shortrule{font-size:12px;color:#7d8699;line-height:1.7;background:#0a120d;border-radius:9px;
+padding:9px 11px;margin-bottom:12px}
+.shortrule b{color:#d2d8e6}
+.scard{background:#12151d;border:1px solid #2a3348;border-left:3px solid #e8484f;
+border-radius:11px;padding:12px 13px;margin-bottom:9px}
+.sbadge{font-size:12px;padding:2px 10px;border-radius:20px;background:#3a1418;color:#ff8fa0;
+margin-left:auto;font-weight:700}
+.shortwarn{font-size:11.5px;color:#8b6b6b;line-height:1.7;margin-top:8px;padding-left:2px}
 .ft{font-size:11px;color:#3d4352;text-align:center;margin-top:26px;line-height:1.9}
 .spin{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.3);
 border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-3px;margin-right:8px}
@@ -545,6 +555,35 @@ async function renderAlts() {
 
   let h = '<h3>山寨币监控 · ' + (ALT.updated || "") + "</h3>";
 
+  /* ---- 可做空信号（最重要的是这个） ---- */
+  const shorts = ALT.short || [];
+  if (shorts.length) {
+    h += '<div class="shortbox">' +
+      '<div class="shorthead">🎯 山寨币做空信号</div>' +
+      '<div class="shortrule">回测 435 个暴涨事件：胜率 69% · 中位 +20.6% · t=4.55<br>' +
+      '<b>做法：1x 杠杆、不挂止损、持有 20 天、每笔 5% 本金</b><br>' +
+      '价格涨 100% 自动爆仓，亏损正好封在 5% 本金</div>';
+    shorts.forEach(a => {
+      const posUsd = CFG.CAPITAL * 0.05;
+      const qty = posUsd / a.price;
+      const qs = qty >= 1 ? qty.toFixed(2) : qty.toFixed(6);
+      h += '<div class="scard">' +
+        '<div class="atop"><span class="anm">' + a.sym + '</span>' +
+        '<span class="sbadge">暴涨 +' + a.pump_pct + '%</span></div>' +
+        '<div class="aline">现价 <b class="good">' + f(a.price) + '</b>' +
+        '　仓位 <b>' + posUsd.toFixed(2) + 'U</b>（1x）</div>' +
+        '<div class="aline">数量 <b>' + qs + '</b>' +
+        '　持有 <b>20 天</b>　不设止损</div>' +
+        '<div class="aline" style="font-size:11.5px;color:#5f6779">' +
+        '前20日 ' + a.prior20 + '%　量能 ' + a.vol_ratio + 'x　风险分 ' + a.risk + '</div>' +
+        '<div class="acts"><a class="p" style="background:#e8484f;color:#fff" ' +
+        'onclick="copyShort(\'' + a.sym + '\',' + a.price + ',' + posUsd + ',\'' + qs + '\',this)">📋 复制做空参数</a></div>' +
+        '</div>';
+    });
+    h += '<div class="shortwarn">⚠️ 最大风险：这 5% 本金亏光。历史最长连亏 5 笔（-25% 本金）。' +
+         '<br>⚠️ 只在币安有该合约时才能做；小币深度差，用限价单。</div></div>';
+  }
+
   if (ALT.risky && ALT.risky.length) {
     h += '<div class="warn" style="margin-bottom:10px">⚠️ <b>高危名单</b>：涨得猛 + 前期已涨很多 + 量能不足。' +
          '历史上这类币 5 天内跌超 50% 的概率约 20%，别买、持有的话考虑减仓。</div>';
@@ -669,6 +708,18 @@ function modalSave() {
   });
   modalClose();
   if (window._last) render(window._last.rows, window._last.sigs);
+}
+
+/* 复制做空参数 */
+function copyShort(sym, price, usd, qty, el) {
+  const txt = sym + " 做空\n现价 " + price + "\n仓位 " + usd.toFixed(2) + "U（1x）\n数量 " + qty +
+              "\n不设止损，持有 20 天";
+  const done = () => {
+    if (el) { const o = el.textContent; el.textContent = "✅ 已复制"; setTimeout(() => el.textContent = o, 1600); }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(done).catch(() => fallbackCopy(txt, done));
+  } else { fallbackCopy(txt, done); }
 }
 
 /* 复制下单参数（不用跳转币安网站，直接粘到 App 里） */

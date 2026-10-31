@@ -37,6 +37,11 @@ margin-bottom:8px;font-family:inherit}
 .kv span{color:#5f6779;font-size:12.5px;white-space:nowrap}
 .kv b{color:#fff;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .stop{color:#ffc94d!important}
+.lev{color:#8ab4ff!important}
+.good{color:#19c07a!important}
+.bad{color:#ff6b7d!important}
+.warn{background:#2a1f0a;border:1px solid #5c4518;color:#ffc94d;padding:9px 12px;border-radius:10px;
+font-size:12.5px;line-height:1.5;margin-top:10px}
 .acts{display:flex;gap:10px;margin-top:14px}
 .acts a{flex:1;text-align:center;padding:14px 8px;border-radius:13px;font-size:14.5px;font-weight:600;
 text-decoration:none;background:#1c2333;color:#8ab4ff;border:1px solid #2a3448;cursor:pointer}
@@ -79,7 +84,8 @@ const CFG = {
   K_SL: 1.5,        // 初始止损 ATR 倍数
   RISK: 0.05,       // 单笔风险（保守改 0.03）
   MAX_POS: 2,       // 最多同时持仓
-  CAPITAL: 98,      // 本金 USDT
+  MAX_LEV: 5,       // 杠杆上限（币安是整数倍）
+  CAPITAL: 97.66,   // 本金 USDT
   COINS: ["SOL","DOGE","BNB","ADA","BTC","ETH"]
 };
 
@@ -168,23 +174,53 @@ async function scanAll() {
     .sort((a, b) => CFG.COINS.indexOf(a.sym) - CFG.COINS.indexOf(b.sym))
     .slice(0, CFG.MAX_POS);
 
-  sigs.forEach(s => {
-    s.stop = s.sig === "L" ? s.cur - CFG.K_SL * s.atr : s.cur + CFG.K_SL * s.atr;
-    const dist = Math.abs(s.cur - s.stop) / s.cur;
-    let notional = (CFG.CAPITAL * CFG.RISK) / dist;
-    const cap = CFG.CAPITAL * 3;
-    if (notional > cap) notional = cap;
-    s.notional = notional;
-    s.qty = notional / s.cur;
-    s.lev = notional / CFG.CAPITAL;
-    s.dist = dist * 100;
-  });
+  sigs.forEach(s => sizePosition(s));
 
   render(rows, sigs);
   btn.disabled = false;
   btn.textContent = "🔍 重新检查";
   $("hint").textContent = "点上面按钮可以重新检查";
   $("sub").textContent = "Donchian 20 · 日线 · " + new Date().toLocaleString("zh-CN", { hour12: false });
+}
+
+/* ============ 仓位计算（币安整数杠杆 + 最小下单量）============ */
+const STEP = { BTC: 0.001, ETH: 0.001, SOL: 0.01, BNB: 0.01, DOGE: 1, ADA: 1 };
+const MIN_NOTIONAL = 5;      // 币安 U 本位最小下单金额
+
+function sizePosition(s) {
+  s.stop = s.sig === "L" ? s.cur - CFG.K_SL * s.atr : s.cur + CFG.K_SL * s.atr;
+  const dist = Math.abs(s.cur - s.stop) / s.cur;   // 止损距离（比例）
+  s.dist = dist * 100;
+
+  const cap = CFG.CAPITAL;
+  const targetRisk = cap * CFG.RISK;               // 目标风险金额
+
+  // 目标名义 = 风险金额 ÷ 止损距离（这才是真正的仓位）
+  let notional = targetRisk / dist;
+  const maxNotional = cap * CFG.MAX_LEV;
+  if (notional > maxNotional) notional = maxNotional;   // 不超过杠杆上限
+
+  // 整数杠杆：只需覆盖这个名义（杠杆是上限，不用满）
+  let lev = Math.ceil(notional / cap);
+  if (!isFinite(lev) || lev < 1) lev = 1;
+  if (lev > CFG.MAX_LEV) lev = CFG.MAX_LEV;
+
+  // 按币安最小变动单位向下取整
+  const step = STEP[s.sym] || 0.001;
+  const dec = String(step).split(".")[1] ? String(step).split(".")[1].length : 0;
+  let qty = Math.floor((notional / s.cur) / step) * step;
+  qty = +qty.toFixed(dec);
+
+  notional = qty * s.cur;
+  const actualRisk = notional * dist;
+
+  s.lev = lev;
+  s.qty = qty;
+  s.notional = notional;
+  s.risk = actualRisk;
+  s.riskPct = (actualRisk / cap) * 100;            // 实际风险占本金
+  s.tooSmall = notional < MIN_NOTIONAL;            // 低于最小下单额
+  s.overRisk = s.riskPct > CFG.RISK * 100 + 0.5;   // 明显超过目标（取整导致）
 }
 
 function render(rows, sigs) {
@@ -209,12 +245,15 @@ function render(rows, sigs) {
         '</div><div class="kv">' +
         '<div><span>入场</span><b>' + f(s.cur) + '</b></div>' +
         '<div><span>止损</span><b class="stop" onclick="copyOne(\'' + (s.stop >= 1000 ? s.stop.toFixed(1) : s.stop.toFixed(3)) + '\',this)">' + f(s.stop) + ' 📋</b></div>' +
-        '<div><span>数量</span><b onclick="copyOne(\'' + s.qty.toFixed(6) + '\',this)">' + s.qty.toFixed(6) + ' 📋</b></div>' +
-        '<div><span>名义</span><b>' + s.notional.toFixed(0) + 'U</b></div>' +
-        '<div><span>杠杆</span><b>' + s.lev.toFixed(2) + 'x</b></div>' +
-        '<div><span>止损距离</span><b>' + s.dist.toFixed(2) + '%</b></div>' +
-        '</div><div class="acts">' +
-        '<a class="p" onclick="copyOrder(\'' + s.sym + '\',\'' + s.sig + '\',' + s.qty + ',' + s.stop + ',this)">📋 复制下单参数</a>' +
+        '<div><span>杠杆</span><b class="lev">' + s.lev + 'x 📋</b></div>' +
+        '<div><span>数量</span><b onclick="copyOne(\'' + qtyStr(s) + '\',this)">' + qtyStr(s) + ' 📋</b></div>' +
+        '<div><span>名义</span><b>' + s.notional.toFixed(1) + 'U</b></div>' +
+        '<div><span>实际风险</span><b class="' + (s.overRisk ? "bad" : "good") + '">' + s.risk.toFixed(2) + 'U</b></div>' +
+        '</div>' +
+        (s.tooSmall ? '<div class="warn">⚠️ 仓位低于币安最小下单额 5U，这笔做不了</div>' : '') +
+        (s.overRisk && !s.tooSmall ? '<div class="warn">⚠️ 止损太宽，1x 也要亏 ' + s.riskPct.toFixed(1) + '%（超过目标 5%）</div>' : '') +
+        '<div class="acts">' +
+        '<a class="p" onclick="copyOrder(\'' + s.sym + '\',\'' + s.sig + '\',' + s.lev + ',\'' + qtyStr(s) + '\',\'' + (s.stop >= 1000 ? s.stop.toFixed(1) : s.stop.toFixed(3)) + '\',this)">📋 复制下单参数</a>' +
         '<a onclick="mark(\'' + s.sym + '\',\'' + s.sig + '\')">' +
         (isDone ? '已记录 ✓' : '我已开仓') + '</a>' +
         '</div></div>';
@@ -253,10 +292,17 @@ function mark(sym, dir) {
 }
 
 /* 复制下单参数（不用跳转币安网站，直接粘到 App 里） */
-function copyOrder(sym, dir, qty, stop, el) {
+function qtyStr(s) {
+  const step = STEP[s.sym] || 0.001;
+  const dec = String(step).split(".")[1] ? String(step).split(".")[1].length : 0;
+  return s.qty.toFixed(dec);
+}
+
+function copyOrder(sym, dir, lev, qty, stop, el) {
   const txt = sym + "USDT " + (dir === "L" ? "做多" : "做空") +
-              "\n数量 " + qty.toFixed(6) +
-              "\n止损 " + (stop >= 1000 ? stop.toFixed(1) : stop.toFixed(3));
+              "\n杠杆 " + lev + "x" +
+              "\n数量 " + qty +
+              "\n止损 " + stop;
   const done = () => {
     if (el) { const o = el.textContent; el.textContent = "✅ 已复制"; setTimeout(() => el.textContent = o, 1600); }
   };

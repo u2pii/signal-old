@@ -13,7 +13,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: write
 
@@ -24,19 +24,22 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check signals and push
+      - name: Check main signals and push
         env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
         run: python check_push.py
 
-      - name: Commit state
+      - name: Scan altcoins
+        run: python scan_alts.py || true
+
+      - name: Commit state and alt data
         run: |
           git config user.name "signal-bot"
           git config user.email "signal-bot@users.noreply.github.com"
-          git add alert_state.json || true
+          git add alert_state.json alt_watch.json || true
           if git diff --staged --quiet; then
             echo "no change"
           else
-            git commit -m "chore: update alert state [skip ci]"
+            git commit -m "chore: update state [skip ci]"
             git push
           fi

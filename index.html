@@ -89,6 +89,7 @@ border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertica
 const CFG = {
   N: 20,            // 突破周期
   K_SL: 1.5,        // 初始止损 ATR 倍数
+  M_TRAIL: 3.0,     // 移动止损 ATR 倍数（吊灯）
   RISK: 0.08,       // 单笔风险（8% 对应「能接受50%回撤」）
   MAX_POS: 2,       // 最多同时持仓
   MAX_LEV: 10,      // 杠杆上限
@@ -166,8 +167,56 @@ function atr14(bars, n = 14) {
 /* ============ 本地记录 ============ */
 const K = (s) => "pos_" + s;
 const load = (s) => { try { const v = localStorage.getItem(K(s)); return v ? JSON.parse(v) : null } catch(e) { return null } };
+const loadPos = load;
 const save = (s, o) => { try { localStorage.setItem(K(s), JSON.stringify(o)) } catch(e) {} };
+const savePos = save;
 const del = (s) => { try { localStorage.removeItem(K(s)) } catch(e) {} };
+
+/* 更新移动止损（吊灯）：持仓期极值 ∓ 3×ATR，只朝有利方向 */
+function updateTrailing(p, r) {
+  const atr = r.atr;
+  const close = r.cur;
+  let sl = p.sl, ext = p.ext;
+  if (p.dir === "L") {
+    ext = Math.max(ext || p.entry, close);
+    sl = Math.max(sl, ext - CFG.M_TRAIL * atr);
+  } else {
+    ext = Math.min(ext || p.entry, close);
+    sl = Math.min(sl, ext + CFG.M_TRAIL * atr);
+  }
+  const moved = (p.dir === "L" ? sl > p.sl + 1e-9 : sl < p.sl - 1e-9);
+  const pnlPct = (close / p.entry - 1) * 100 * (p.dir === "L" ? 1 : -1);
+
+  // 是否该平仓
+  const hit = (p.dir === "L" && r.cur <= sl) || (p.dir === "S" && r.cur >= sl);
+  const rev = (p.dir === "L" && close < r.ll) || (p.dir === "S" && close > r.hh);
+
+  return {
+    sl, ext, moved, pnlPct,
+    shouldClose: hit || rev,
+    closeReason: hit ? "触及移动止损" : (rev ? "反向信号" : null),
+    atr,
+  };
+}
+
+/* 更新持仓的止损（用户点「已更新」后写入） */
+function applySl(sym) {
+  const p = loadPos(sym);
+  if (!p || !p._newSl) return;
+  p.sl = p._newSl;
+  p.ext = p._newExt;
+  delete p._newSl; delete p._newExt;
+  savePos(sym, p);
+  if (window._last) render(window._last.rows, window._last.sigs);
+}
+
+function closePos(sym) {
+  const p = loadPos(sym);
+  if (!p) return;
+  if (!confirm("确认已在币安平掉 " + sym + " 的仓？")) return;
+  del(sym);
+  if (window._last) render(window._last.rows, window._last.sigs);
+}
 
 function resetAll() {
   if (!confirm("清空所有开仓记录？（只清记录，不影响你的实际持仓）")) return;
@@ -224,7 +273,22 @@ async function scanAll() {
   sigs.push(...keep);
   rows._dropped = dropped;
 
-  render(rows, sigs);
+  // 处理已有持仓：更新移动止损（所有持仓都要显示，不管有没有信号）
+  const holdings = [];
+  for (const r of rows) {
+    if (r.err) continue;
+    const p = loadPos(r.sym);
+    if (!p) continue;
+    r.pos = p;
+    r.posInfo = updateTrailing(p, r);
+    holdings.push(r);
+  }
+  rows._holdings = holdings;
+
+  // 已持仓的币不再显示「开仓信号」，避免重复开仓
+  const finalSigs = sigs.filter(s => !holdings.some(h => h.sym === s.sym));
+
+  render(rows, finalSigs);
   btn.disabled = false;
   btn.textContent = "🔍 重新检查";
   $("hint").textContent = "点上面按钮可以重新检查";
@@ -314,6 +378,42 @@ function render(rows, sigs) {
     });
   }
 
+  /* ---- 持仓中：移动止损 ---- */
+  const holds = rows._holdings || [];
+  if (holds.length) {
+    h += '<h3>持仓中 · 移动止损</h3>';
+    holds.forEach(r => {
+      const p = r.pos, info = r.posInfo;
+      const dirTxt = p.dir === "L" ? "多" : "空";
+      const cls = p.dir === "L" ? "L" : "S";
+      const pnlCls = info.pnlPct >= 0 ? "up" : "dn";
+      const slTxt = info.moved
+        ? '<b class="good">' + f(info.sl) + ' ⬆️</b>'
+        : '<b>' + f(info.sl) + '</b>';
+      h += '<div class="card hold">' +
+        '<div class="top"><span class="sym">' + r.sym + '</span>' +
+        '<span class="pill ' + cls + '">' + dirTxt + '</span>' +
+        '<span class="pnl ' + pnlCls + '">' + (info.pnlPct >= 0 ? "+" : "") + info.pnlPct.toFixed(2) + '%</span>' +
+        '</div><div class="kv">' +
+        '<div><span>入场</span><b>' + f(p.entry) + '</b></div>' +
+        '<div><span>现价</span><b>' + f(r.cur) + '</b></div>' +
+        '<div><span>原止损</span><b>' + f(p.sl) + '</b></div>' +
+        '<div><span>新止损</span>' + slTxt + '</div>' +
+        '</div>' +
+        (info.shouldClose
+          ? '<div class="warn" style="background:#1a0f11;border-color:#5c2028;color:#ff9aa6">🚪 ' +
+            info.closeReason + ' → 现在平仓</div>' +
+            '<div class="acts"><a class="p" style="background:#e8484f;color:#fff" onclick="closePos(\'' + r.sym + '\')">我已平仓</a></div>'
+          : (info.moved
+            ? '<div class="acts"><a class="p" onclick="applySl(\'' + r.sym + '\')">✅ 已在币安改好止损</a></div>'
+            : '<div style="font-size:12px;color:#5f6779;margin-top:10px">止损未变，不用操作</div>')) +
+        '</div>';
+      // 记录待更新的止损
+      p._newSl = info.sl;
+      p._newExt = info.ext;
+    });
+  }
+
   h += '<h3>全部币种</h3>';
   rows.forEach(r => {
     if (r.err) {
@@ -336,12 +436,15 @@ function render(rows, sigs) {
 }
 
 function mark(sym, dir) {
-  if (load(sym)) { alert(sym + " 已经记录过开仓了"); return; }
+  const p = loadPos(sym);
+  if (p) { alert(sym + " 已经记录过开仓了"); return; }
+  const s = (window._last && window._last.sigs || []).find(x => x.sym === sym);
+  if (!s) { alert("找不到这个信号，请重新检查"); return; }
   if (!confirm("确认已在币安开好 " + sym + " 的仓，并挂上止损？")) return;
-  save(sym, { dir: dir, t: Date.now() });
-  const btn = $("go");
-  btn.textContent = "🔍 重新检查";
-  // 重新渲染当前结果
+  savePos(sym, {
+    dir: dir, entry: s.cur, sl: s.stop, ext: s.cur,
+    qty: s.qty, lev: s.lev, date: new Date().toISOString().slice(0, 10),
+  });
   if (window._last) render(window._last.rows, window._last.sigs);
 }
 

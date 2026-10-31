@@ -158,34 +158,46 @@ function jfetch(url, ms = 15000) {
   });
 }
 
-/* 抓日线：优先合约（U 本位永续），失败再退现货 */
+/* 抓日线：币安优先（和你看到的价格一致），失败再退 Gate / OKX */
 async function daily(sym) {
-  // 1) Gate.io 合约（跟你在币安做的是同一类标的）
+  // 1) 币安公开行情（data-api.binance.vision，国内可通）
+  try {
+    const raw = await jfetch("https://data-api.binance.vision/api/v3/klines?symbol=" +
+      sym + "USDT&interval=1d&limit=200");
+    if (Array.isArray(raw) && raw.length >= 45) {
+      const b = raw.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4] }));
+      b.sort((a, x) => a.t - x.t);
+      b._src = "币安";
+      return b;
+    }
+  } catch (e) { /* 下一步 */ }
+
+  // 2) Gate 合约
   try {
     const raw = await jfetch("https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=" +
       sym + "_USDT&interval=1d&limit=200");
     const b = raw.map(r => ({ t: +r.t, o: +r.o, h: +r.h, l: +r.l, c: +r.c }));
     b.sort((a, x) => a.t - x.t);
-    if (b.length >= 45) { b._src = "合约"; return b; }
+    if (b.length >= 45) { b._src = "Gate合约"; return b; }
   } catch (e) { /* 下一步 */ }
 
-  // 2) OKX 永续
+  // 3) OKX 永续
   try {
     const raw = await jfetch("https://www.okx.com/api/v5/market/candles?instId=" + sym + "-USDT-SWAP&bar=1D&limit=200");
     if (raw.code === "0" && raw.data && raw.data.length >= 45) {
       const b = raw.data.map(r => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4] }));
       b.sort((a, x) => a.t - x.t);
-      b._src = "合约";
+      b._src = "OKX";
       return b;
     }
   } catch (e) { /* 下一步 */ }
 
-  // 3) 兜底：现货
+  // 4) 兜底：Gate 现货
   const raw = await jfetch("https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=" +
     sym + "_USDT&interval=1d&limit=200");
   const b = raw.map(r => ({ t: +r[0], o: +r[5], h: +r[3], l: +r[4], c: +r[2] }));
   b.sort((a, x) => a.t - x.t);
-  b._src = "现货";
+  b._src = "Gate现货";
   return b;
 }
 
@@ -280,7 +292,8 @@ async function scanAll() {
       const hh = Math.max.apply(null, seg.map(b => b.h));
       const ll = Math.min.apply(null, seg.map(b => b.l));
       const atr = atr14(closed);
-      return { sym, cur, hh, ll, atr, sig: cur > hh ? "L" : (cur < ll ? "S" : null) };
+      return { sym, cur, hh, ll, atr, src: bars._src,
+               sig: cur > hh ? "L" : (cur < ll ? "S" : null) };
     } catch (e) {
       return { sym, err: String(e.message || e).slice(0, 40) };
     }
@@ -330,7 +343,10 @@ async function scanAll() {
   btn.disabled = false;
   btn.textContent = "🔍 重新检查";
   $("hint").textContent = "点上面按钮可以重新检查";
-  $("sub").textContent = "Donchian 20 · 日线 · " + new Date().toLocaleString("zh-CN", { hour12: false });
+  const srcSet = [...new Set(rows.filter(r => !r.err).map(r => r.src).filter(Boolean))];
+  $("sub").textContent = "Donchian 20 · 日线 · " +
+    new Date().toLocaleString("zh-CN", { hour12: false }) +
+    (srcSet.length ? "  ·  数据：" + srcSet.join("/") : "");
 }
 
 /* ============ 仓位计算（币安整数杠杆 + 最小下单量）============ */
@@ -431,6 +447,9 @@ function render(rows, sigs) {
       h += '<div class="card hold">' +
         '<div class="top"><span class="sym">' + r.sym + '</span>' +
         '<span class="pill ' + cls + '">' + dirTxt + '</span>' +
+        (r.sig
+          ? '<span class="pill ' + r.sig + '" style="font-size:11px">信号持续</span>'
+          : '<span class="pill ok" style="font-size:11px">信号已失效</span>') +
         '<span class="pnl ' + pnlCls + '">' + (info.pnlPct >= 0 ? "+" : "") + info.pnlPct.toFixed(2) + '%</span>' +
         '</div><div class="kv">' +
         '<div><span>入场</span><b onclick="editPos(\'' + r.sym + '\')">' + f(p.entry) + ' ✏️</b></div>' +
@@ -438,6 +457,10 @@ function render(rows, sigs) {
         '<div><span>原止损</span><b>' + f(p.sl) + '</b></div>' +
         '<div><span>新止损</span>' + slTxt + '</div>' +
         '</div>' +
+        (r.sig
+          ? '<div style="font-size:11.5px;color:#5f6779;margin-top:8px">' +
+            (r.sig === "L" ? "仍在 20 日高上方，多头信号有效" : "仍在 20 日低下方，空头信号有效") + '</div>'
+          : '<div style="font-size:11.5px;color:#5f6779;margin-top:8px">已回到区间内，靠移动止损管理</div>') +
         (info.shouldClose
           ? '<div class="warn" style="background:#1a0f11;border-color:#5c2028;color:#ff9aa6">🚪 ' +
             info.closeReason + ' → 现在平仓</div>' +

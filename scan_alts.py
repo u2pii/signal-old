@@ -174,7 +174,58 @@ def watch_score(m):
     return min(s, 100)
 
 
-def short_setups(scanned, bars_map):
+BN_LIST_CACHE = os.path.join(HERE, "binance_futures.json")
+
+
+def load_binance_futures():
+    """币安 U 本位永续合约的交易对集合
+       本地网络被墙，但在 GitHub Actions 上能拿到；拿到后缓存复用
+    """
+    # 先用缓存（24 小时内有效）
+    if os.path.exists(BN_LIST_CACHE):
+        try:
+            with open(BN_LIST_CACHE, encoding="utf-8") as f:
+                d = json.load(f)
+            if time.time() - d.get("ts", 0) < 86400 and d.get("symbols"):
+                print(f"  币安合约列表（缓存）{len(d['symbols'])} 个")
+                return set(d["symbols"])
+        except Exception:
+            pass
+
+    for url in ("https://fapi.binance.com/fapi/v1/exchangeInfo",
+                "https://www.binance.com/fapi/v1/exchangeInfo"):
+        try:
+            req = urllib.request.Request(url, headers=UA)
+            with urllib.request.urlopen(req, timeout=25) as r:
+                info = json.loads(r.read().decode())
+            syms = []
+            for s in info.get("symbols", []):
+                if (s.get("status") == "TRADING"
+                        and s.get("quoteAsset") == "USDT"
+                        and s.get("contractType") == "PERPETUAL"):
+                    syms.append(s["symbol"])
+            if syms:
+                with open(BN_LIST_CACHE, "w", encoding="utf-8") as f:
+                    json.dump({"ts": time.time(), "symbols": syms}, f)
+                print(f"  币安合约列表（新抓取）{len(syms)} 个")
+                return set(syms)
+        except Exception as e:
+            print(f"  币安列表抓取失败 {url.split('/')[2]}: {str(e)[:40]}")
+
+    # 兜底：用缓存里的旧数据
+    if os.path.exists(BN_LIST_CACHE):
+        try:
+            with open(BN_LIST_CACHE, encoding="utf-8") as f:
+                d = json.load(f)
+            print(f"  币安合约列表（旧缓存）{len(d.get('symbols', []))} 个")
+            return set(d.get("symbols", []))
+        except Exception:
+            pass
+    print("  ⚠️ 拿不到币安合约列表，所有币标记为未知")
+    return set()
+
+
+def short_setups(scanned, bars_map, bn_set):
     """可做空信号：最近 2 天内单日涨 ≥30%，次日做空
        回测：胜率 69%，中位 +20.6%，t=4.55（持有20天，1x，不设止损）
     """
@@ -201,8 +252,10 @@ def short_setups(scanned, bars_map):
             continue
         if m["amp"] < 0.015:
             continue
+        sym = m["sym"]
+        on_bn = (sym + "USDT") in bn_set if bn_set else None
         out.append({
-            "sym": m["sym"], "price": m["cur"],
+            "sym": sym, "price": m["cur"],
             "pump_pct": round(hit["pct"], 1),
             "pump_date": hit["date"],
             "days_ago": hit["days_ago"],
@@ -210,8 +263,10 @@ def short_setups(scanned, bars_map):
             "vol_ratio": round(m["vol_ratio"], 2),
             "qv": round(m["qv"] / 10000, 0),
             "risk": m["risk"],
+            "on_bn": on_bn,
         })
-    out.sort(key=lambda x: -x["pump_pct"])
+    # 币安有的排前面，其次按涨幅
+    out.sort(key=lambda x: (0 if x.get("on_bn") else 1, -x["pump_pct"]))
     return out
 
 
@@ -282,10 +337,12 @@ def main():
             "risk": m["risk"], "watch": m["watch"],
         }
 
+    bn_set = load_binance_futures()
+
     payload = {
         "updated": datetime.now(TZ).strftime("%Y-%m-%d %H:%M"),
         "scanned": len(scanned),
-        "short": short_setups(scanned, bars_map)[:10],
+        "short": short_setups(scanned, bars_map, bn_set)[:10],
         "risky": [slim(m) for m in risky[:15]],
         "watch": [slim(m) for m in watch[:15]],
         "note": "风险分高 = 涨得猛+前期已涨+量能不足。观察分高 = 放量但未大涨。做空信号 = 最近2天单日涨≥30%，回测胜率69%/中位+20.6%/t=4.55（1x、不设止损、持20天）。",

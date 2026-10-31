@@ -174,6 +174,47 @@ def watch_score(m):
     return min(s, 100)
 
 
+def short_setups(scanned, bars_map):
+    """可做空信号：最近 2 天内单日涨 ≥30%，次日做空
+       回测：胜率 69%，中位 +20.6%，t=4.55（持有20天，1x，不设止损）
+    """
+    out = []
+    for m in scanned:
+        bars = bars_map.get(m["pair"])
+        if not bars or len(bars) < 30:
+            continue
+        # 检查最近 2 根日线是否有暴涨
+        hit = None
+        for k in (1, 2):
+            idx = len(bars) - k
+            if idx < 1:
+                continue
+            prev = bars[idx - 1]["c"]
+            if prev <= 0:
+                continue
+            r = bars[idx]["c"] / prev - 1
+            if r >= 0.30:
+                hit = {"days_ago": k - 1, "pct": r * 100,
+                       "date": datetime.fromtimestamp(bars[idx]["t"], TZ).strftime("%m-%d")}
+                break
+        if not hit:
+            continue
+        if m["amp"] < 0.015:
+            continue
+        out.append({
+            "sym": m["sym"], "price": m["cur"],
+            "pump_pct": round(hit["pct"], 1),
+            "pump_date": hit["date"],
+            "days_ago": hit["days_ago"],
+            "prior20": round(m["prior20"] * 100, 1),
+            "vol_ratio": round(m["vol_ratio"], 2),
+            "qv": round(m["qv"] / 10000, 0),
+            "risk": m["risk"],
+        })
+    out.sort(key=lambda x: -x["pump_pct"])
+    return out
+
+
 def main():
     print("拉取交易对...", flush=True)
     tickers = get(f"{BASE}/spot/tickers")
@@ -193,10 +234,12 @@ def main():
     print(f"扫描 {len(rows)} 个山寨币（24h成交额>30万U）\n", flush=True)
 
     scanned = []
+    bars_map = {}
     for i, r in enumerate(rows):
         pair = r["pair"]
         try:
             bars = daily(pair)
+            bars_map[pair] = bars
             m = analyze(bars)
             if not m:
                 continue
@@ -242,9 +285,10 @@ def main():
     payload = {
         "updated": datetime.now(TZ).strftime("%Y-%m-%d %H:%M"),
         "scanned": len(scanned),
+        "short": short_setups(scanned, bars_map)[:10],
         "risky": [slim(m) for m in risky[:15]],
         "watch": [slim(m) for m in watch[:15]],
-        "note": "风险分高 = 涨得猛+前期已涨+量能不足，历史上这类币5天内跌超50%概率约20%。观察分高 = 放量但未大涨，可能异动但无统计优势。均不构成交易建议。",
+        "note": "风险分高 = 涨得猛+前期已涨+量能不足。观察分高 = 放量但未大涨。做空信号 = 最近2天单日涨≥30%，回测胜率69%/中位+20.6%/t=4.55（1x、不设止损、持20天）。",
     }
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=1)

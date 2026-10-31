@@ -37,7 +37,7 @@ def klines(sym, limit=60):
         try: return json.load(open(fn, encoding="utf-8"))
         except Exception: pass
     raw = get_json(f"/fapi/v1/klines?symbol={sym}&interval=1d&limit={limit}")
-    bars = [{"t":int(k[0]),"o":float(k[1]),"h":float(k[2]),"l":float(k[3]),"c":float(k[4]),"v":float(k[5])} for k in raw]
+    bars = [{"t":int(k[0])//1000,"o":float(k[1]),"h":float(k[2]),"l":float(k[3]),"c":float(k[4]),"v":float(k[5])} for k in raw]
     bars.sort(key=lambda x: x["t"])
     json.dump(bars, open(fn,"w",encoding="utf-8"))
     return bars

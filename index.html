@@ -267,6 +267,12 @@ const del = (s) => { try { localStorage.removeItem(K(s)) } catch(e) {} };
 
 /* 更新移动止损（吊灯）：持仓期极值 ∓ 3×ATR，只朝有利方向 */
 function updateTrailing(p, r) {
+  // 山寨币做空：按策略不设止损、持有 20 天，只显示盈亏
+  if (p.alt) {
+    const pnl = (r.cur / p.entry - 1) * 100 * (p.dir === "L" ? 1 : -1);
+    return { sl: p.sl, ext: p.ext || p.entry, moved: false, pnlPct: pnl,
+             shouldClose: false, closeReason: null, atr: r.atr };
+  }
   const atr = r.atr;
   const close = r.cur;
   let sl = p.sl, ext = p.ext;
@@ -325,7 +331,14 @@ async function scanAll() {
   $("out").innerHTML = "";
   $("hint").textContent = "正在拉取 6 个币的日线数据…";
 
-  const rows = await Promise.all(CFG.COINS.map(async (sym) => {
+  // 已记录持仓的币也要扫描（可能在列表之外，比如山寨币）
+  let heldSyms = [];
+  try {
+    heldSyms = Object.keys(localStorage).filter(k => k.indexOf("pos_") === 0).map(k => k.slice(4));
+  } catch (e) {}
+  const scanList = CFG.COINS.concat(heldSyms.filter(s => CFG.COINS.indexOf(s) < 0));
+
+  const rows = await Promise.all(scanList.map(async (sym) => {
     try {
       const bars = await daily(sym);
       const closed = bars.slice(0, -1);
@@ -602,8 +615,10 @@ async function renderAlts() {
         '　持有 <b>20 天</b>　不设止损</div>' +
         '<div class="aline" style="font-size:11.5px;color:#5f6779">' +
         '前20日 ' + a.prior20 + '%　量能 ' + a.vol_ratio + 'x　风险分 ' + a.risk + '</div>' +
-        '<div class="acts"><a class="p" style="background:#e8484f;color:#fff" ' +
-        'onclick="copyShort(\'' + a.sym + '\',' + a.price + ',' + posUsd + ',\'' + qs + '\',this)">📋 复制做空参数</a></div>' +
+        '<div class="acts">' +
+        '<a class="p" style="background:#e8484f;color:#fff" ' +
+        'onclick="copyShort(\'' + a.sym + '\',' + a.price + ',' + posUsd + ',\'' + qs + '\',this)">📋 复制参数</a>' +
+        '<a onclick="markAlt(\'' + a.sym + '\',' + a.price + ',' + posUsd + ',\'' + qs + '\')">我已开空</a></div>' +
         '</div>';
     });
     h += '<div class="shortwarn">⚠️ 最大风险：这 5% 本金亏光。历史最长连亏 5 笔（-25% 本金）。' +
@@ -810,6 +825,20 @@ function modalSave() {
   });
   modalClose();
   if (window._last) render(window._last.rows, window._last.sigs);
+}
+
+/* 山寨币做空：直接记录持仓 */
+function markAlt(sym, price, usd, qty, el) {
+  if (loadPos(sym)) { alert(sym + " 已经有持仓记录了"); return; }
+  if (!confirm("确认已在币安开好 " + sym + " 的空单？\n\n仓位 " + usd.toFixed(2) + "U\n数量 " + qty)) return;
+  savePos(sym, {
+    dir: "S", entry: price, sl: price * 2, ext: price,
+    qty: parseFloat(qty), lev: 1, margin: usd,
+    date: new Date().toISOString().slice(0, 10),
+    alt: true,
+  });
+  if (window._last) render(window._last.rows, window._last.sigs);
+  scanAll();
 }
 
 /* 复制做空参数 */

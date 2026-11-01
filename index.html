@@ -142,6 +142,26 @@ border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertica
   </div>
 </div>
 
+<!-- 加仓弹窗 -->
+<div class="modal" id="amodal">
+  <div class="mbox">
+    <div class="mhead" id="a-title">加仓</div>
+    <div class="mrow">
+      <label>加仓价格</label>
+      <input id="a-price" type="number" step="any" inputmode="decimal" oninput="onAddEdit()">
+    </div>
+    <div class="mrow">
+      <label>加仓金额（USDT 保证金）</label>
+      <input id="a-usd" type="number" step="any" inputmode="decimal" oninput="onAddEdit()">
+    </div>
+    <div class="mmsg" id="a-msg"></div>
+    <div class="macts">
+      <button onclick="aClose()">取消</button>
+      <button class="p" onclick="aSave()">确认加仓</button>
+    </div>
+  </div>
+</div>
+
 <div class="ft">规则固定：突破 20 日高/低 → 开仓<br>止损 1.5 ATR · 杠杆按整数算 · 最多 2 仓</div>
 <div class="clear"><a href="javascript:resetAll()">清空开仓记录</a></div>
 
@@ -482,11 +502,14 @@ function render(rows, sigs) {
         '<div><span>现价</span><b>' + f(r.cur) + '</b></div>' +
         '<div><span>原止损</span><b>' + f(p.sl) + '</b></div>' +
         '<div><span>新止损</span>' + slTxt + '</div>' +
+        '<div><span>保证金</span><b>' + (p.margin ? p.margin.toFixed(2) + 'U' : '—') + '</b></div>' +
+        '<div><span>杠杆</span><b>' + (p.margin && p.qty ? (p.qty * p.entry / p.margin).toFixed(2) + 'x' : '—') + '</b></div>' +
         '</div>' +
         (r.sig
           ? '<div style="font-size:11.5px;color:#5f6779;margin-top:8px">' +
             (r.sig === "L" ? "仍在 20 日高上方，多头信号有效" : "仍在 20 日低下方，空头信号有效") + '</div>'
           : '<div style="font-size:11.5px;color:#5f6779;margin-top:8px">已回到区间内，靠移动止损管理</div>') +
+        '<div class="acts"><a onclick="openAdd(\'' + r.sym + '\')">➕ 加仓</a></div>' +
         (info.shouldClose
           ? '<div class="warn" style="background:#1a0f11;border-color:#5c2028;color:#ff9aa6">🚪 ' +
             info.closeReason + ' → 现在平仓</div>' +
@@ -647,6 +670,81 @@ function onEntryEdit() {
   updateModalMsg();
 }
 
+/* ============ 加仓（分批建仓） ============ */
+let _adding = null;
+
+function openAdd(sym) {
+  const p = loadPos(sym);
+  if (!p) { alert("还没有这个币的持仓记录"); return; }
+  const r = (window._last && window._last.rows || []).find(x => x.sym === sym);
+  _adding = { sym, dir: p.dir };
+  $("a-title").textContent = "加仓 " + sym + " " + (p.dir === "L" ? "做多" : "做空");
+  $("a-price").value = r ? r.cur : p.entry;
+  $("a-usd").value = "45";
+  onAddEdit();
+  $("amodal").classList.add("on");
+}
+
+function onAddEdit() {
+  if (!_adding) return;
+  const pr = parseFloat($("a-price").value);
+  const usd = parseFloat($("a-usd").value);
+  const msg = $("a-msg");
+  msg.classList.remove("bad");
+  if (!isFinite(pr) || !isFinite(usd) || pr <= 0 || usd <= 0) {
+    msg.textContent = "填入价格和金额";
+    return;
+  }
+  const p = loadPos(_adding.sym);
+  const addQty = usd / pr;
+  const oldQty = p.qty || 0;
+  const newQty = oldQty + addQty;
+  const oldMargin = p.margin || (oldQty * p.entry / (p.lev || 1));
+  const newMargin = oldMargin + usd;
+  const newEntry = (oldQty * p.entry + addQty * pr) / newQty;
+  const newLev = (newQty * newEntry) / newMargin;
+  msg.innerHTML = "加仓数量 <b style='color:#8ab4ff'>" + addQty.toFixed(6) + "</b><br>" +
+    "均价 <b>" + fmtP(oldEntry(p)) + " → " + fmtP(newEntry) + "</b>　" +
+    "总量 <b>" + newQty.toFixed(6) + "</b><br>" +
+    "保证金 <b>" + oldMargin.toFixed(2) + " → " + newMargin.toFixed(2) + " U</b>　" +
+    "杠杆 <b>" + newLev.toFixed(2) + "x</b>";
+}
+
+function oldEntry(p) { return p.entry; }
+
+function fmtP(v) {
+  if (v >= 1000) return v.toFixed(1);
+  if (v >= 10) return v.toFixed(2);
+  if (v >= 1) return v.toFixed(3);
+  return v.toFixed(5);
+}
+
+function aClose() { $("amodal").classList.remove("on"); _adding = null; }
+
+function aSave() {
+  if (!_adding) return;
+  const pr = parseFloat($("a-price").value);
+  const usd = parseFloat($("a-usd").value);
+  if (!isFinite(pr) || !isFinite(usd) || pr <= 0 || usd <= 0) { alert("填写有误"); return; }
+  const p = loadPos(_adding.sym);
+  if (!p) return;
+  const addQty = usd / pr;
+  const oldQty = p.qty || 0;
+  const newQty = oldQty + addQty;
+  const oldMargin = p.margin || (oldQty * p.entry / (p.lev || 1));
+  const newMargin = oldMargin + usd;
+  const newEntry = (oldQty * p.entry + addQty * pr) / newQty;
+  p.legs = p.legs || [{ entry: p.entry, qty: oldQty, margin: oldMargin, date: p.date }];
+  p.legs.push({ entry: pr, qty: addQty, margin: usd, date: new Date().toISOString().slice(0, 10) });
+  p.entry = newEntry;
+  p.qty = newQty;
+  p.margin = newMargin;
+  p.lev = newQty * newEntry / newMargin;
+  savePos(_adding.sym, p);
+  aClose();
+  if (window._last) render(window._last.rows, window._last.sigs);
+}
+
 /* 修改已有持仓的入场价 */
 function editPos(sym) {
   const p = loadPos(sym);
@@ -706,6 +804,7 @@ function modalSave() {
     ext: _editing.mode === "edit" && old ? (old.ext || e) : e,
     qty: old ? old.qty : +(CFG.CAPITAL * CFG.RISK / Math.abs(e - s)).toFixed(6),
     lev: old ? old.lev : 1,
+    margin: old ? (old.margin || old.qty * old.entry / (old.lev || 1)) : (CFG.CAPITAL * CFG.RISK),
     date: old ? old.date : new Date().toISOString().slice(0, 10),
     edited: _editing.mode === "edit" ? true : undefined,
   });
